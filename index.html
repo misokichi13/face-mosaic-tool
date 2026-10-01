@@ -100,14 +100,13 @@
     </div>
   </div>
 
-  <!-- タップモード切り替え ＆ 保存ボタン -->
   <div class="mode-box">
     <span>操作モード：</span>
     <button id="modeAddBtn" class="active">🟦 モザイク追加</button>
     <button id="modeRemoveBtn">🟩 モザイク解除</button>
     <button id="clearManualBtn" class="clear-btn">リセット</button>
     <br><br>
-    <button id="downloadBtn" class="download-btn" disabled>💾 画像/動画を保存する</button>
+    <button id="downloadBtn" class="download-btn" disabled>💾 画像を保存する</button>
     <p id="modeTip" class="tip">💡 画面をタップすると、その位置にモザイクを追加します。</p>
   </div>
 
@@ -214,7 +213,6 @@
       ctx.imageSmoothingEnabled = true;
     }
 
-    // タップ操作
     outputCanvas.addEventListener('click', (e) => {
       if (!outputCanvas.width || !outputCanvas.height) return;
 
@@ -239,12 +237,39 @@
       }
     });
 
-    // スマホ用：保存ダウンロード処理
+    // スマホ軽量化・保存処理（Blob形式＋軽量化リサイズ）
     downloadBtn.addEventListener('click', () => {
-      const link = document.createElement('a');
-      link.download = 'mosaic-processed.png';
-      link.href = outputCanvas.toDataURL('image/png');
-      link.click();
+      const maxDimension = 1920; // 長辺を最大1920pxに制限してメモリ不足を防止
+      let width = outputCanvas.width;
+      let height = outputCanvas.height;
+
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = width;
+      tempCanvas.height = height;
+      const tempCtx = tempCanvas.getContext('2d');
+      tempCtx.drawImage(outputCanvas, 0, 0, width, height);
+
+      tempCanvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.download = 'mosaic-processed.jpg';
+        link.href = url;
+        link.click();
+        
+        // メモリ解放
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }, 'image/jpeg', 0.9);
     });
 
     modeAddBtn.addEventListener('click', () => {
