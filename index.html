@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>自動・手動・解除対応モザイクツール</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 800px;
+      margin: 20px auto;
+      padding: 0 10px;
+      text-align: center;
+      background-color: #f9f9f9;
+    }
+    .container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+    .box {
+      flex: 1;
+      min-width: 280px;
+      background: #fff;
+      border: 2px dashed #007bff;
+      padding: 20px;
+      border-radius: 8px;
+    }
+    video, canvas, img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 8px;
+      margin-top: 10px;
+      cursor: crosshair;
+    }
+    button {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      padding: 10px 18px;
+      font-size: 15px;
+      border-radius: 5px;
+      cursor: pointer;
+      margin: 5px;
+    }
+    button.active {
+      outline: 3px solid #ff9800;
+      font-weight: bold;
+    }
+    button:disabled {
+      background-color: #ccc;
+    }
+    .remove-btn {
+      background-color: #28a745;
+    }
+    .clear-btn {
+      background-color: #dc3545;
+    }
+    .mode-box {
+      background: #e9ecef;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
+    h2 {
+      font-size: 18px;
+      margin-top: 0;
+      color: #333;
+    }
+    .tip {
+      font-size: 14px;
+      color: #555;
+      margin-top: 5px;
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <h1>🎥 自動・手動・解除対応モザイク</h1>
+  <p id="status">AIモデルを読み込み中...</p>
+
+  <div class="container">
+    <div class="box">
+      <h2>🖼️ 写真（画像）</h2>
+      <input type="file" id="imageInput" accept="image/*" disabled>
+    </div>
+    <div class="box">
+      <h2>🎬 動画</h2>
+      <input type="file" id="videoInput" accept="video/*" disabled>
+      <br>
+      <button id="processBtn" disabled>動画の処理開始</button>
+    </div>
+  </div>
+
+  <!-- タップモード切り替え -->
+  <div class="mode-box">
+    <span>クリック（タップ）時の動作：</span>
+    <button id="modeAddBtn" class="active">🟦 モザイク追加</button>
+    <button id="modeRemoveBtn" class="remove-btn">🟩 モザイク解除（復元）</button>
+    <button id="clearManualBtn" class="clear-btn">手動操作をリセット</button>
+    <p id="modeTip" class="tip">💡 画面をクリックすると、その位置にモザイクを追加します。</p>
+  </div>
+
+  <div>
+    <canvas id="outputCanvas"></canvas>
+  </div>
+
+  <video id="hiddenVideo" style="display:none;" playsinline></video>
+  <img id="hiddenImage" style="display:none;" alt="作業用">
+
+  <script>
+    const imageInput = document.getElementById('imageInput');
+    const videoInput = document.getElementById('videoInput');
+    const processBtn = document.getElementById('processBtn');
+    const clearManualBtn = document.getElementById('clearManualBtn');
+    const modeAddBtn = document.getElementById('modeAddBtn');
+    const modeRemoveBtn = document.getElementById('modeRemoveBtn');
+    const modeTip = document.getElementById('modeTip');
+    const statusText = document.getElementById('status');
+    const hiddenVideo = document.getElementById('hiddenVideo');
+    const hiddenImage = document.getElementById('hiddenImage');
+    const outputCanvas = document.getElementById('outputCanvas');
+    const ctx = outputCanvas.getContext('2d');
+
+    let faceDetection;
+    let isAIReady = false;
+    let currentMode = '';
+    let tapMode = 'add'; // 'add' または 'remove'
+    
+    let manualAddMosaics = [];
+    let manualRemoveAreas = [];
+
+    faceDetection = new FaceDetection({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
+    });
+
+    faceDetection.setOptions({
+      model: 'full',
+      minDetectionConfidence: 0.2
+    });
+
+    faceDetection.onResults((results) => {
+      ctx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+      // 1. 原本を描画
+      ctx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
+
+      // 2. AI自動検出モザイク
+      if (results.detections && results.detections.length > 0) {
+        results.detections.forEach((detection) => {
+          const bbox = detection.boundingBox;
+          let x = bbox.xCenter * outputCanvas.width - (bbox.width * outputCanvas.width) / 2;
+          let y = bbox.yCenter * outputCanvas.height - (bbox.height * outputCanvas.height) / 2;
+          let w = bbox.width * outputCanvas.width;
+          let h = bbox.height * outputCanvas.height;
+
+          const paddingX = w * 0.25;
+          const paddingY = h * 0.25;
+          x = Math.max(0, x - paddingX);
+          y = Math.max(0, y - paddingY);
+          w = Math.min(outputCanvas.width - x, w + paddingX * 2);
+          h = Math.min(outputCanvas.height - y, h + paddingY * 2);
+
+          applyMosaic(x, y, w, h);
+        });
+      }
+
+      // 3. 手動追加モザイクを描画
+      manualAddMosaics.forEach((m) => {
+        applyMosaic(m.x, m.y, m.w, m.h);
+      });
+
+      // 4. 手動解除（元の画像を上書き復元）
+      manualRemoveAreas.forEach((r) => {
+        const sourceImage = currentMode === 'image' ? hiddenImage : hiddenVideo;
+        ctx.drawImage(sourceImage, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
+      });
+
+      if (currentMode === 'image') {
+        statusText.innerText = "完了！クリック操作でモザイクの追加・解除ができます。";
+      }
+    });
+
+    faceDetection.initialize().then(() => {
+      isAIReady = true;
+      imageInput.disabled = false;
+      videoInput.disabled = false;
+      statusText.innerText = "画像または動画ファイルを選択してください。";
+    });
+
+    function applyMosaic(x, y, w, h) {
+      if (w <= 0 || h <= 0) return;
+      const tileSize = 35;
+
+      const smallW = Math.max(1, Math.floor(w / tileSize));
+      const smallH = Math.max(1, Math.floor(h / tileSize));
+
+      const offscreenCanvas = document.createElement('canvas');
+      offscreenCanvas.width = smallW;
+      offscreenCanvas.height = smallH;
+      const offscreenCtx = offscreenCanvas.getContext('2d');
+
+      offscreenCtx.drawImage(outputCanvas, x, y, w, h, 0, 0, smallW, smallH);
+
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(offscreenCanvas, 0, 0, smallW, smallH, x, y, w, h);
+      ctx.imageSmoothingEnabled = true;
+    }
+
+    // --- クリック（タップ）操作 ---
+    outputCanvas.addEventListener('click', (e) => {
+      if (!outputCanvas.width || !outputCanvas.height) return;
+
+      const rect = outputCanvas.getBoundingClientRect();
+      const scaleX = outputCanvas.width / rect.width;
+      const scaleY = outputCanvas.height / rect.height;
+
+      const clickX = (e.clientX - rect.left) * scaleX;
+      const clickY = (e.clientY - rect.top) * scaleY;
+      const areaSize = Math.max(outputCanvas.width, outputCanvas.height) * 0.09;
+      const x = Math.max(0, clickX - areaSize / 2);
+      const y = Math.max(0, clickY - areaSize / 2);
+
+      if (tapMode === 'add') {
+        manualAddMosaics.push({ x, y, w: areaSize, h: areaSize });
+      } else {
+        manualRemoveAreas.push({ x, y, w: areaSize, h: areaSize });
+      }
+
+      if (currentMode === 'image' && hiddenImage.src) {
+        faceDetection.send({ image: hiddenImage });
+      }
+    });
+
+    // モード切り替えボタン
+    modeAddBtn.addEventListener('click', () => {
+      tapMode = 'add';
+      modeAddBtn.classList.add('active');
+      modeRemoveBtn.classList.remove('active');
+      modeTip.innerText = "💡 画面をクリックすると、その位置にモザイクを追加します。";
+    });
+
+    modeRemoveBtn.addEventListener('click', () => {
+      tapMode = 'remove';
+      modeRemoveBtn.classList.add('active');
+      modeAddBtn.classList.remove('active');
+      modeTip.innerText = "💡 画面をクリックすると、その位置のモザイクを解除（元画像を表示）します。";
+    });
+
+    clearManualBtn.addEventListener('click', () => {
+      manualAddMosaics = [];
+      manualRemoveAreas = [];
+      if (currentMode === 'image' && hiddenImage.src) {
+        faceDetection.send({ image: hiddenImage });
+      }
+    });
+
+    // 画像・動画読み込み
+    imageInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file || !isAIReady) return;
+      currentMode = 'image';
+      manualAddMosaics = [];
+      manualRemoveAreas = [];
+      hiddenImage.src = URL.createObjectURL(file);
+    });
+
+    hiddenImage.onload = () => {
+      outputCanvas.width = hiddenImage.naturalWidth;
+      outputCanvas.height = hiddenImage.naturalHeight;
+      faceDetection.send({ image: hiddenImage });
+    };
+
+    videoInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file || !isAIReady) return;
+      currentMode = 'video';
+      manualAddMosaics = [];
+      manualRemoveAreas = [];
+      hiddenVideo.src = URL.createObjectURL(file);
+      hiddenVideo.load();
+    });
+
+    hiddenVideo.onloadedmetadata = () => {
+      outputCanvas.width = hiddenVideo.videoWidth;
+      outputCanvas.height = hiddenVideo.videoHeight;
+      processBtn.disabled = false;
+      statusText.innerText = "「動画の処理開始」を押してください。";
+    };
+
+    processBtn.addEventListener('click', () => {
+      processBtn.disabled = true;
+      statusText.innerText = "動画のモザイク処理中...";
+      hiddenVideo.play();
+      processFrame();
+    });
+
+    async function processFrame() {
+      if (hiddenVideo.paused || hiddenVideo.ended) {
+        statusText.innerText = "動画処理が完了しました！";
+        processBtn.disabled = false;
+        return;
+      }
+      await faceDetection.send({ image: hiddenVideo });
+      requestAnimationFrame(processFrame);
+    }
+  </script>
+</body>
+</html>
