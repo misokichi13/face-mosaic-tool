@@ -52,8 +52,11 @@
     button:disabled {
       background-color: #ccc;
     }
-    .remove-btn {
+    .download-btn {
       background-color: #28a745;
+      font-weight: bold;
+      font-size: 16px;
+      padding: 12px 24px;
     }
     .clear-btn {
       background-color: #dc3545;
@@ -97,13 +100,15 @@
     </div>
   </div>
 
-  <!-- タップモード切り替え -->
+  <!-- タップモード切り替え ＆ 保存ボタン -->
   <div class="mode-box">
-    <span>クリック（タップ）時の動作：</span>
+    <span>操作モード：</span>
     <button id="modeAddBtn" class="active">🟦 モザイク追加</button>
-    <button id="modeRemoveBtn" class="remove-btn">🟩 モザイク解除（復元）</button>
-    <button id="clearManualBtn" class="clear-btn">手動操作をリセット</button>
-    <p id="modeTip" class="tip">💡 画面をクリックすると、その位置にモザイクを追加します。</p>
+    <button id="modeRemoveBtn">🟩 モザイク解除</button>
+    <button id="clearManualBtn" class="clear-btn">リセット</button>
+    <br><br>
+    <button id="downloadBtn" class="download-btn" disabled>💾 画像/動画を保存する</button>
+    <p id="modeTip" class="tip">💡 画面をタップすると、その位置にモザイクを追加します。</p>
   </div>
 
   <div>
@@ -117,6 +122,7 @@
     const imageInput = document.getElementById('imageInput');
     const videoInput = document.getElementById('videoInput');
     const processBtn = document.getElementById('processBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
     const clearManualBtn = document.getElementById('clearManualBtn');
     const modeAddBtn = document.getElementById('modeAddBtn');
     const modeRemoveBtn = document.getElementById('modeRemoveBtn');
@@ -130,7 +136,7 @@
     let faceDetection;
     let isAIReady = false;
     let currentMode = '';
-    let tapMode = 'add'; // 'add' または 'remove'
+    let tapMode = 'add';
     
     let manualAddMosaics = [];
     let manualRemoveAreas = [];
@@ -146,10 +152,8 @@
 
     faceDetection.onResults((results) => {
       ctx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
-      // 1. 原本を描画
       ctx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
 
-      // 2. AI自動検出モザイク
       if (results.detections && results.detections.length > 0) {
         results.detections.forEach((detection) => {
           const bbox = detection.boundingBox;
@@ -169,19 +173,18 @@
         });
       }
 
-      // 3. 手動追加モザイクを描画
       manualAddMosaics.forEach((m) => {
         applyMosaic(m.x, m.y, m.w, m.h);
       });
 
-      // 4. 手動解除（元の画像を上書き復元）
       manualRemoveAreas.forEach((r) => {
         const sourceImage = currentMode === 'image' ? hiddenImage : hiddenVideo;
         ctx.drawImage(sourceImage, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h);
       });
 
       if (currentMode === 'image') {
-        statusText.innerText = "完了！クリック操作でモザイクの追加・解除ができます。";
+        statusText.innerText = "完了！保存ボタンを押して端末に保存できます。";
+        downloadBtn.disabled = false;
       }
     });
 
@@ -211,7 +214,7 @@
       ctx.imageSmoothingEnabled = true;
     }
 
-    // --- クリック（タップ）操作 ---
+    // タップ操作
     outputCanvas.addEventListener('click', (e) => {
       if (!outputCanvas.width || !outputCanvas.height) return;
 
@@ -236,19 +239,26 @@
       }
     });
 
-    // モード切り替えボタン
+    // スマホ用：保存ダウンロード処理
+    downloadBtn.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = 'mosaic-processed.png';
+      link.href = outputCanvas.toDataURL('image/png');
+      link.click();
+    });
+
     modeAddBtn.addEventListener('click', () => {
       tapMode = 'add';
       modeAddBtn.classList.add('active');
       modeRemoveBtn.classList.remove('active');
-      modeTip.innerText = "💡 画面をクリックすると、その位置にモザイクを追加します。";
+      modeTip.innerText = "💡 画面をタップすると、その位置にモザイクを追加します。";
     });
 
     modeRemoveBtn.addEventListener('click', () => {
       tapMode = 'remove';
       modeRemoveBtn.classList.add('active');
       modeAddBtn.classList.remove('active');
-      modeTip.innerText = "💡 画面をクリックすると、その位置のモザイクを解除（元画像を表示）します。";
+      modeTip.innerText = "💡 画面をタップすると、その位置のモザイクを解除します。";
     });
 
     clearManualBtn.addEventListener('click', () => {
@@ -259,7 +269,6 @@
       }
     });
 
-    // 画像・動画読み込み
     imageInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file || !isAIReady) return;
@@ -294,6 +303,7 @@
 
     processBtn.addEventListener('click', () => {
       processBtn.disabled = true;
+      downloadBtn.disabled = true;
       statusText.innerText = "動画のモザイク処理中...";
       hiddenVideo.play();
       processFrame();
@@ -303,6 +313,7 @@
       if (hiddenVideo.paused || hiddenVideo.ended) {
         statusText.innerText = "動画処理が完了しました！";
         processBtn.disabled = false;
+        downloadBtn.disabled = false;
         return;
       }
       await faceDetection.send({ image: hiddenVideo });
