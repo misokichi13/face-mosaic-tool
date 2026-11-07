@@ -140,6 +140,11 @@
     let manualAddMosaics = [];
     let manualRemoveAreas = [];
 
+    // 動画モード用：処理中のキャンバスを録画して、動画のまま保存できるようにする
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let recordedVideoBlob = null;
+
     faceDetection = new FaceDetection({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`
     });
@@ -192,6 +197,8 @@
       imageInput.disabled = false;
       videoInput.disabled = false;
       statusText.innerText = "画像または動画ファイルを選択してください。";
+    }).catch(() => {
+      statusText.innerText = "AIモデルの読み込みに失敗しました。通信状態を確認して、ページを再読み込みしてください。";
     });
 
     function applyMosaic(x, y, w, h) {
@@ -239,6 +246,21 @@
 
     // スマホ軽量化・保存処理（Blob形式＋軽量化リサイズ）
     downloadBtn.addEventListener('click', () => {
+      // 動画モードでは、処理中に録画したWebM動画をそのまま保存する
+      if (currentMode === 'video') {
+        if (!recordedVideoBlob) {
+          statusText.innerText = "動画データの準備ができていません。処理が終わってから少し待って、もう一度押してください。";
+          return;
+        }
+        const videoUrl = URL.createObjectURL(recordedVideoBlob);
+        const videoLink = document.createElement('a');
+        videoLink.download = 'mosaic-video.webm';
+        videoLink.href = videoUrl;
+        videoLink.click();
+        setTimeout(() => URL.revokeObjectURL(videoUrl), 1000);
+        return;
+      }
+
       const maxDimension = 1920; // 長辺を最大1920pxに制限してメモリ不足を防止
       let width = outputCanvas.width;
       let height = outputCanvas.height;
@@ -300,6 +322,7 @@
       currentMode = 'image';
       manualAddMosaics = [];
       manualRemoveAreas = [];
+      downloadBtn.innerText = "💾 画像を保存する";
       hiddenImage.src = URL.createObjectURL(file);
     });
 
@@ -315,6 +338,7 @@
       currentMode = 'video';
       manualAddMosaics = [];
       manualRemoveAreas = [];
+      recordedVideoBlob = null;
       hiddenVideo.src = URL.createObjectURL(file);
       hiddenVideo.load();
     });
@@ -330,6 +354,22 @@
       processBtn.disabled = true;
       downloadBtn.disabled = true;
       statusText.innerText = "動画のモザイク処理中...";
+
+      // 処理結果を動画として保存できるよう、キャンバスの録画を並行して行う
+      recordedChunks = [];
+      recordedVideoBlob = null;
+      try {
+        const stream = outputCanvas.captureStream(30);
+        let recMime = 'video/webm;codecs=vp9';
+        if (!window.MediaRecorder || (recMime && !MediaRecorder.isTypeSupported(recMime))) recMime = 'video/webm';
+        mediaRecorder = new MediaRecorder(stream, { mimeType: recMime, videoBitsPerSecond: 5000000 });
+        mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+        mediaRecorder.onstop = () => { recordedVideoBlob = new Blob(recordedChunks, { type: 'video/webm' }); };
+        mediaRecorder.start(200);
+      } catch (err) {
+        mediaRecorder = null;
+      }
+
       hiddenVideo.play();
       processFrame();
     });
@@ -339,6 +379,8 @@
         statusText.innerText = "動画処理が完了しました！";
         processBtn.disabled = false;
         downloadBtn.disabled = false;
+        if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+        downloadBtn.innerText = "💾 動画を保存する";
         return;
       }
       await faceDetection.send({ image: hiddenVideo });
